@@ -27,6 +27,8 @@ pub use sp_runtime::BuildStorage;
 
 pub mod genesis_config_presets;
 
+pub use pallet_contracts;
+
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
 /// of data like extrinsics, allowing for them to continue syncing the network through upgrades
@@ -222,7 +224,10 @@ mod runtime {
 	#[runtime::pallet_index(6)]
 	pub type Sudo = pallet_sudo;
 
-	// Include the custom logic from the pallet-template in the runtime.
 	#[runtime::pallet_index(7)]
+	pub type Contracts = pallet_contracts;
+
+	// Include the custom logic from the pallet-template in the runtime.
+	#[runtime::pallet_index(8)]
 	pub type Template = pallet_template;
 }

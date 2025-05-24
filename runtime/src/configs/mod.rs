@@ -26,7 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf},
+	traits::{ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf, Nothing },
 	weights::{
 		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
 		IdentityFee, Weight,
@@ -35,12 +35,17 @@ use frame_support::{
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+use sp_core::H256;
 use sp_runtime::{traits::One, Perbill};
 use sp_version::RuntimeVersion;
 
+// pallet imports
+use pallet_contracts::config_preludes::{DefaultDepositLimit, DepositPerByte, DepositPerItem};
+use pallet_contracts::migration::{v15, v16};
+
 // Local module imports
 use super::{
-	AccountId, Aura, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
+	AccountId, Aura, Balance, Balances, Block, Timestamp, BlockNumber, TransactionPayment, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
 };
@@ -155,6 +160,60 @@ impl pallet_sudo::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type RuntimeCall = RuntimeCall;
 	type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+	pub const MaxCodeLen: u32 = 128 * 1024;
+	pub const MaxStorageKeyLen: u32 = 128;
+	pub Schedule: pallet_contracts::Schedule<Runtime> = pallet_contracts::Schedule::default();
+	pub const CodeHashLockupDepositPercent: Perbill = Perbill::from_percent(30);
+
+}
+
+pub struct DummyRandomness;
+impl frame_support::traits::Randomness<H256, BlockNumber> for DummyRandomness {
+    fn random(_subject: &[u8]) -> (H256, BlockNumber) {
+        (Default::default(), 0)
+    }
+}
+
+impl pallet_contracts::Config for Runtime{
+	type Time = Timestamp;
+	type Randomness = DummyRandomness;
+	type Currency = Balances;
+	type RuntimeEvent = RuntimeEvent;
+	type RuntimeCall = RuntimeCall;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type CallFilter = Nothing;
+	type WeightPrice = TransactionPayment;
+	type WeightInfo = pallet_contracts::weights::SubstrateWeight<Runtime>;
+	type ChainExtension = (); 
+	type Schedule = Schedule;
+	type CallStack = [pallet_contracts::Frame<Self>; 5];
+
+	type DepositPerByte = DepositPerByte;
+	type DepositPerItem = DepositPerItem;
+	type DefaultDepositLimit = DefaultDepositLimit;
+	type CodeHashLockupDepositPercent = CodeHashLockupDepositPercent; // 30%
+	type AddressGenerator = pallet_contracts::DefaultAddressGenerator;
+	type MaxCodeLen = MaxCodeLen;
+	type MaxStorageKeyLen = MaxStorageKeyLen;
+	type MaxTransientStorageSize = ConstU32<{ 64 * 1024 }>;
+	type MaxDelegateDependencies = ConstU32<32>;
+	type UnsafeUnstableInterface = ConstBool<false>;
+	type MaxDebugBufferLen = ConstU32<{ 2 * 1024 * 1024 }>;
+
+	type UploadOrigin = frame_system::EnsureSigned<Self::AccountId>;
+	type InstantiateOrigin = frame_system::EnsureSigned<Self::AccountId>;
+	type Migrations = (
+		v15::Migration<Runtime>,
+		v16::Migration<Runtime>,
+	);
+	type Debug = ();
+	type Environment = ();
+	type ApiVersion = ();
+	type Xcm = (); 
+
 }
 
 /// Configure the pallet-template in pallets/template.

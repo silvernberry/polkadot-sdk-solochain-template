@@ -9696,6 +9696,7 @@ dependencies = [
  "frame-try-runtime",
  "pallet-aura",
  "pallet-balances",
+ "pallet-contracts",
  "pallet-grandpa",
  "pallet-sudo",
  "pallet-template",
