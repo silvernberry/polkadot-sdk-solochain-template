@@ -99,6 +99,7 @@ mod schedule;
 mod storage;
 mod transient_storage;
 mod wasm;
+mod stake;
 
 pub mod chain_extension;
 pub mod debug;
@@ -1360,6 +1361,20 @@ pub mod pallet {
 	#[pallet::storage]
 	pub(crate) type ContractInfoOf<T: Config> =
 		StorageMap<_, Twox64Concat, T::AccountId, ContractInfo<T>>;
+
+	// ./stake/mod.rs - structure
+	use crate::stake::{DelegateInfo,StakeInfo};
+
+	/// Tracks Delegate Information of a staked contract (PoCS)
+	#[pallet::storage]
+	#[pallet::getter(fn get_delegate_info)]
+	pub type DelegateInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, DelegateInfo<T>>;
+
+	/// Tracks Stake Score Information of a contract (PoCS)
+	#[pallet::storage]
+	#[pallet::getter(fn get_stake_info)]
+	pub type StakeInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, StakeInfo<T>>;
+	
 
 	/// Evicted contracts that await child trie deletion.
 	///
