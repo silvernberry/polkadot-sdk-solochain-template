@@ -24,6 +24,16 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use codec::{ Encode, Decode, MaxEncodedLen };
 use scale_info::TypeInfo;
 
+
+/// The fixed unit used for incrementing reputation and initializing it during instantiation.
+/// 
+pub const REPUTATION_FACTOR: u32 = 1;
+
+/// The initial stake score, set to zero for contract constructor purposes.
+/// 
+pub const INITIAL_STAKE_SCORE: u128 = 0;
+
+
 /// Represents the delegation details of a deployed contract.
 /// 
 /// It includes:
@@ -134,6 +144,54 @@ impl<T: Config> StakeInfo<T>{
             reputation: reputation,
             blockheight: <frame_system::Pallet<T>>::block_number(),
             stake_score: stake_score
+        }
+    }
+
+
+    /// Creates a new `StakeInfo` instance using predefined constants for instantiation. 
+    /// 
+	fn new() -> Self {
+		Self{
+			reputation: REPUTATION_FACTOR,
+			blockheight: <frame_system::Pallet<T>>::block_number(),
+			stake_score: INITIAL_STAKE_SCORE,
+		}
+	}
+
+    /// Resets the stake score in `StakeInfo` to zero, updates the block number, and retains the reputation. 
+    /// 
+	fn reset(&self)-> Self {
+		Self{
+			reputation: self.reputation,
+			blockheight: <frame_system::Pallet<T>>::block_number(),
+			stake_score: INITIAL_STAKE_SCORE,
+		}
+	}
+
+    /// Updates the stake score based on gas usage provided and adjusts reputation if the block height has changed.
+    /// 
+    fn update(&self, gas: &u64) -> Self {
+        let current_block_height = <frame_system::Pallet<T>>::block_number();
+        let current_reputation = self.reputation;
+        let gas_cast = *gas as u128;
+        if current_block_height > self.blockheight {
+            let new_stake_score =  gas_cast
+                                        .saturating_mul(current_reputation.into())
+                                        .saturating_add(self.stake_score);
+            Self {
+                reputation: current_reputation
+                            .saturating_add(REPUTATION_FACTOR),
+                blockheight: current_block_height,
+                stake_score: new_stake_score,
+            }
+        } else {
+            let new_stake_score = gas_cast
+                                        .saturating_add(self.stake_score);
+            Self {
+                reputation: current_reputation,
+                blockheight: current_block_height,
+                stake_score: new_stake_score,
+            }
         }
     }
 }
