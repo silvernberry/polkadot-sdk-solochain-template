@@ -1216,6 +1216,8 @@ pub mod pallet {
 
 	#[pallet::error]
 	pub enum Error<T> {
+		/// Stake information for account is not available (PoCS)
+		NoStakeExists,
 		/// Invalid schedule supplied, e.g. with zero weight of a basic operation.
 		InvalidSchedule,
 		/// Invalid combination of flags supplied to `seal_call` or `seal_delegate_call`.
@@ -1367,10 +1369,12 @@ pub mod pallet {
 
 	/// Tracks Delegate Information of a staked contract (PoCS)
 	#[pallet::storage]
+	#[pallet::getter(fn get_delegate_info)]
 	pub type DelegateInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, DelegateInfo<T>>;
 
 	/// Tracks Stake Score Information of a contract (PoCS)
 	#[pallet::storage]
+	#[pallet::getter(fn get_stake_info)]
 	pub type StakeInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, StakeInfo<T>>;
 	
 	/// Evicted contracts that await child trie deletion.

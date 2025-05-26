@@ -18,11 +18,12 @@
 //
 
 use crate::{
-	Config, Pallet as Contracts
+	Config, Error, Pallet as Contracts
 };
 use frame_system::pallet_prelude::BlockNumberFor;
 use codec::{ Encode, Decode, MaxEncodedLen };
 use scale_info::TypeInfo;
+use sp_runtime::DispatchError;
 
 /// Represents the delegation details of a deployed contract.
 /// 
@@ -40,6 +41,35 @@ pub struct DelegateInfo<T: Config> {
 }
 
 
+impl<T: Config> DelegateInfo<T> {
+
+    /// Returns the owner `AccountId` of the contract associated with this `DelegateInfo`.
+    /// 
+    fn owner(&self) -> T::AccountId {
+        self.owner.clone()
+    }
+
+    /// Returns the `AccountId` of the validator to whom the contract is delegated.
+    /// 
+    fn delegate_to(&self) -> T::AccountId {
+        self.delegate_to.clone()
+    }
+    
+    /// Returns the block number when the delegate information was last updated.
+    /// 
+    fn delegate_at(&self) -> BlockNumberFor<T> {
+        self.delegate_at
+    }
+
+    /// Retrieves the `DelegateInfo` for a given contract address.
+    /// 
+    fn get(contract_addr: &T::AccountId) -> Result<DelegateInfo<T>, DispatchError> {
+        Contracts::<T>::get_delegate_info(contract_addr)
+            .ok_or_else(|| Error::<T>::NoStakeExists.into())
+    }
+
+
+}
 /// Tracks the gas usage metrics of a contract for staking purposes.
 /// 
 /// It includes:
@@ -53,4 +83,33 @@ pub struct StakeInfo<T: Config> {
 	reputation: u32,
 	blockheight: BlockNumberFor<T>,
 	stake_score: u128,
+}
+
+impl<T: Config> StakeInfo<T>{
+
+    /// Returns the stake score of a contract's `StakeInfo`. 
+    /// 
+    fn stake_score(&self) -> u128 {
+        self.stake_score
+    }
+
+    /// Returns the reputation score of a contract's `StakeInfo`.
+    /// 
+    fn reputation(&self) -> u32 {
+        self.reputation
+    }
+    
+    /// Returns the block height of the most recent interaction with the contract. 
+    /// 
+    fn blockheight(&self) -> BlockNumberFor<T> {
+        self.blockheight
+    }
+
+    /// Retrieves the `StakeInfo` of an instantiated contract.
+    /// 
+    fn get(contract_addr: &T::AccountId) -> Result<StakeInfo<T>,DispatchError> {
+        Contracts::<T>::get_stake_info(contract_addr)
+            .ok_or_else(|| Error::<T>::NoStakeExists.into())
+    }
+
 }
