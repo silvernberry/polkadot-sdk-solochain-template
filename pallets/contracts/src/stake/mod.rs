@@ -40,6 +40,57 @@ pub struct DelegateInfo<T: Config> {
 }
 
 
+impl<T: Config> DelegateInfo<T> {
+
+    /// Returns the owner `AccountId` of the contract associated with this `DelegateInfo`.
+    /// 
+    fn owner(&self) -> T::AccountId {
+        self.owner.clone()
+    }
+
+    /// Returns the `AccountId` of the validator to whom the contract is delegated.
+    /// 
+    fn delegate_to(&self) -> T::AccountId {
+        self.delegate_to.clone()
+    }
+    
+    /// Returns the block number when the delegate information was last updated.
+    /// 
+    fn delegate_at(&self) -> BlockNumberFor<T> {
+        self.delegate_at
+    }
+
+    /// Creates a new `DelegateInfo` instance where the deployer is both the owner and delegate.
+    /// 
+    fn new(owner: &T::AccountId) -> Self {
+        Self {
+            owner: owner.clone(),
+            delegate_to: owner.clone(),
+            delegate_at: frame_system::Pallet::<T>::block_number(),
+        }
+    }
+
+    /// Updates the `delegate_to` field and returns an updated `DelegateInfo` instance.
+    /// 
+    fn update(&self, delegate: &T::AccountId) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            delegate_to: delegate.clone(),
+            delegate_at: frame_system::Pallet::<T>::block_number(),
+        }
+    }
+
+    /// Updates the `owner` field and returns an updated `DelegateInfo` instance
+    ///
+    fn update_owner(&self, new_owner: &T::AccountId) -> Self {
+        Self {
+            owner: new_owner.clone(),
+            delegate_to: self.delegate_to.clone(),
+            delegate_at: frame_system::Pallet::<T>::block_number(),
+        }
+    }
+    
+}
 /// Tracks the gas usage metrics of a contract for staking purposes.
 /// 
 /// It includes:
@@ -55,3 +106,34 @@ pub struct StakeInfo<T: Config> {
 	stake_score: u128,
 }
 
+
+impl<T: Config> StakeInfo<T>{
+
+    /// Returns the stake score of a contract's `StakeInfo`. 
+    /// 
+    fn stake_score(&self) -> u128 {
+        self.stake_score
+    }
+
+    /// Returns the reputation score of a contract's `StakeInfo`.
+    /// 
+    fn reputation(&self) -> u32 {
+        self.reputation
+    }
+    
+    /// Returns the block height of the most recent interaction with the contract. 
+    /// 
+    fn blockheight(&self) -> BlockNumberFor<T> {
+        self.blockheight
+    }
+
+    /// Creates a mock `StakeInfo` instance for testing with a given stake score and reputation.
+    /// 
+    pub fn mock_stake(stake_score: u128, reputation: u32) -> Self{
+        Self{
+            reputation: reputation,
+            blockheight: <frame_system::Pallet<T>>::block_number(),
+            stake_score: stake_score
+        }
+    }
+}
