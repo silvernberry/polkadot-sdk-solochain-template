@@ -1139,6 +1139,19 @@ pub mod pallet {
 			<DelegateRequest<T>>::delegate(&origin,&contract_addr,&delegate_to)?;
 			Ok(())
 		}
+
+		#[pallet::call_index(11)]
+		#[pallet::weight(0)]
+		pub fn update_owner(
+			origin: OriginFor<T>,
+			contract_addr: T::AccountId,
+			new_owner: T::AccountId,
+		)-> DispatchResult {
+			let origin = ensure_signed(origin.clone())?;
+			<DelegateRequest<T>>::update_stake_owner(&origin,&contract_addr,&new_owner)?;
+			Ok(())
+		}
+
 	}
 
 	#[pallet::event]
@@ -1259,6 +1272,14 @@ pub mod pallet {
 			/// Provides Assurance if the validator can start validating
 			can_validate: bool
 		},
+
+		/// Stake Owner is updated for a contract via [`Pallet::update_owner`] (PoCS) 
+		StakeOwner {
+			/// The contract address for which owner information is updated 
+			contract: T::AccountId,
+			/// The new stake owner of the contract
+			new_owner: T::AccountId,
+		},
 	}
 
 	#[pallet::error]
@@ -1275,6 +1296,8 @@ pub mod pallet {
 		LowReputation,
 		/// Invalid Owner of a contract (PoCS)
 		InvalidContractOwner,
+		/// The contract or account is already owned by the given account address (PoCS)
+		AlreadyOwner,
 		/// The required minimum number of delegates has not been met for validation (PoCS)
 		InsufficientDelegates,
 		/// No validator was found for the given contract address (PoCS)

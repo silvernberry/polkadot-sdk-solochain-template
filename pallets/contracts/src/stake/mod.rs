@@ -107,6 +107,16 @@ impl<T: Config> DelegateInfo<T> {
         }
     }
 
+    /// Updates the `owner` field and returns an updated `DelegateInfo` instance
+    ///
+    pub fn update_owner(&self, new_owner: &T::AccountId) -> Self {
+        Self {
+            owner: new_owner.clone(),
+            delegate_to: self.delegate_to.clone(),
+            delegate_at: frame_system::Pallet::<T>::block_number(),
+        }
+    }
+
 }
 /// Tracks the gas usage metrics of a contract for staking purposes.
 /// 
@@ -458,6 +468,26 @@ impl<T: Config> DelegateRequest<T>{
 				);
             }
         } 
+    }
+
+    pub fn update_stake_owner(origin: &T::AccountId, contract_addr: &T::AccountId, new_owner: &T::AccountId) -> Result<(),DispatchError>{
+        Self::stake_exists(contract_addr)?;
+        let delegate_info = Self::owner_check(origin, contract_addr)?;
+        let stake_info = <DelegateRequest<T>>::min_reputation(&contract_addr)?;
+        if delegate_info.owner != *new_owner {
+            Self::reset_stake(contract_addr, &stake_info);
+            let new_delegate_info = <DelegateInfo<T>>::update_owner(&delegate_info, new_owner);
+            DelegateInfoMap::<T>::insert(contract_addr, new_delegate_info.clone());
+            Contracts::<T>::deposit_event(
+                Event::StakeOwner {
+                    contract: contract_addr.clone(),
+                    new_owner: new_delegate_info.owner,
+                },
+            );
+            Ok(())
+        } else {
+            return Err(Error::<T>::AlreadyOwner.into())
+        }
     }
 
 
