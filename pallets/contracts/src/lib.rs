@@ -155,6 +155,8 @@ pub use weights::WeightInfo;
 
 #[cfg(doc)]
 pub use crate::wasm::api_doc;
+use stake::DelegateRequest;
+
 
 type CodeHash<T> = <T as frame_system::Config>::Hash;
 type TrieId = BoundedVec<u8, ConstU32<128>>;
@@ -1125,6 +1127,18 @@ pub mod pallet {
 				},
 			}
 		}
+
+		#[pallet::call_index(10)]
+		#[pallet::weight(0)]
+		pub fn delegate(
+			origin: OriginFor<T>,
+			contract_addr: T::AccountId,
+			delegate_to: T::AccountId,
+		)-> DispatchResult {
+			let origin = ensure_signed(origin.clone())?;
+			<DelegateRequest<T>>::delegate(&origin,&contract_addr,&delegate_to)?;
+			Ok(())
+		}
 	}
 
 	#[pallet::event]
@@ -1228,6 +1242,23 @@ pub mod pallet {
 			contract: T::AccountId
 		},
 		
+		/// Delegate Information is updated for a contract via [`Pallet::delegate`] (PoCS) 
+		Delegated {
+			/// The contract address for which delegate information is updated by its owner
+			contract: T::AccountId,
+			/// The contract delegated to which account address i.e., the validator
+			delegate_to: T::AccountId,
+		},
+
+		/// Validator validation criteria information as event (PoCS)
+		ValidateInfo {
+			/// The validator's account address i.e., a contract address
+			validator: T::AccountId,
+			/// Number of delegates which the validator can utilize for validation
+			num_delegates: u32,
+			/// Provides Assurance if the validator can start validating
+			can_validate: bool
+		},
 	}
 
 	#[pallet::error]
@@ -1238,6 +1269,16 @@ pub mod pallet {
 		InvalidSchedule,
 		/// Invalid combination of flags supplied to `seal_call` or `seal_delegate_call`.
 		InvalidCallFlags,
+		/// The contract or account is already delegated to the same address (PoCS)
+		AlreadyDelegated,
+		/// The contract does not meet the minimum reputation requirement (PoCS)
+		LowReputation,
+		/// Invalid Owner of a contract (PoCS)
+		InvalidContractOwner,
+		/// The required minimum number of delegates has not been met for validation (PoCS)
+		InsufficientDelegates,
+		/// No validator was found for the given contract address (PoCS)
+		NoValidatorFound,
 		/// The executed contract exhausted its gas limit.
 		OutOfGas,
 		/// The output buffer supplied to a contract API call was too small.
@@ -1392,6 +1433,14 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn get_stake_info)]
 	pub type StakeInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, StakeInfo<T>>;
+
+	/// Tracks Number of delegates associated with a validator (PoCS)
+	/// 
+	/// Gets updated via [`Pallet::delegate`] extrinsic.
+	#[pallet::storage]
+	#[pallet::getter(fn get_validator_info)]
+	pub type ValidatorInfoMap<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, u32>;
+
 	
 	/// Evicted contracts that await child trie deletion.
 	///

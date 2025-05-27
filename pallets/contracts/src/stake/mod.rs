@@ -18,27 +18,29 @@
 //
 
 use crate::{
-	Config, Error, Event, Pallet as Contracts, StakeInfoMap, DelegateInfoMap
+	Config, Error, Event, Pallet as Contracts, StakeInfoMap, DelegateInfoMap, ValidatorInfoMap
 };
 use frame_system::pallet_prelude::BlockNumberFor;
 use codec::{ Encode, Decode, MaxEncodedLen };
 use scale_info::TypeInfo;
-use sp_runtime::{
-    traits::Hash, DispatchError
-}; 
+use sp_runtime::DispatchError; 
 
 
 /// The minimum reputation required to participate in staking contracts.
 /// 
-pub const MIN_REPUTATION: u32 = 3; 
+const MIN_REPUTATION: u32 = 3; 
+
+/// The minimum number of delegates required for a validator to be eligible.
+/// 
+const MIN_DELEGATES: u32 = 10; 
 
 /// The fixed unit used for incrementing reputation and initializing it during instantiation.
 /// 
-pub const REPUTATION_FACTOR: u32 = 1;
+const REPUTATION_FACTOR: u32 = 1;
 
 /// The initial stake score, set to zero for contract constructor purposes.
 /// 
-pub const INITIAL_STAKE_SCORE: u128 = 0;
+const INITIAL_STAKE_SCORE: u128 = 0;
 
 
 /// Represents the delegation details of a deployed contract.
@@ -94,6 +96,16 @@ impl<T: Config> DelegateInfo<T> {
         }
     }
 
+
+    /// Updates the `delegate_to` field and returns an updated `DelegateInfo` instance.
+    /// 
+    fn update(&self, delegate: &T::AccountId) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            delegate_to: delegate.clone(),
+            delegate_at: frame_system::Pallet::<T>::block_number(),
+        }
+    }
 
 }
 /// Tracks the gas usage metrics of a contract for staking purposes.
@@ -174,6 +186,17 @@ impl<T: Config> StakeInfo<T>{
             }
         }
     }
+
+    /// Resets the stake score in `StakeInfo` to zero, updates the block number, and retains the reputation. 
+    /// 
+	fn reset(&self)-> Self {
+		Self{
+			reputation: self.reputation,
+			blockheight: <frame_system::Pallet<T>>::block_number(),
+			stake_score: INITIAL_STAKE_SCORE,
+		}
+	}
+
 
 }
 
@@ -267,3 +290,201 @@ impl<T: Config> StakeRequest<T>{
 
 
 }
+
+
+/// Represents a delegate request for a contract.
+///
+/// It includes:
+/// - `contract` - The contract for which the delegation request is made.
+/// - `delegate_to` - The account to which the contract is delegating to.
+/// 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(T))]
+pub struct DelegateRequest<T: Config> {
+	contract: T::AccountId,
+    delegate_to: T::AccountId,
+}
+
+impl<T: Config> DelegateRequest<T>{
+
+    /// Delegates a contract to a new delegate account.
+    ///
+    /// This function checks if the contract has an existing stake, verifies the  
+    /// caller's ownership, and ensures the contract meets the minimum reputation  
+    /// requirements. If the new delegate is different from the existing one,  
+    /// it resets the stake, updates the delegate information, and emits a  
+    /// `Delegated` event. If the delegate remains the same, an error is returned.   
+    /// 
+    pub fn delegate(origin: &T::AccountId, contract_addr: &T::AccountId, delegate_to: &T::AccountId) -> Result<(),DispatchError>{
+        Self::stake_exists(contract_addr)?;
+        let delegate_info = Self::owner_check(origin, contract_addr)?;
+        let stake_info = <DelegateRequest<T>>::min_reputation(&contract_addr)?;
+        if delegate_info.delegate_to != *delegate_to {
+            Self::reset_stake(contract_addr, &stake_info);
+            let new_delegate_info = <DelegateInfo<T>>::update(&delegate_info, delegate_to);
+            DelegateInfoMap::<T>::insert(contract_addr, new_delegate_info.clone());
+            Contracts::<T>::deposit_event(
+                Event::Delegated {
+                    contract: contract_addr.clone(),
+                    delegate_to: new_delegate_info.delegate_to,
+                },
+            );
+            Self::decrement(&delegate_info.delegate_to);
+            Self::increment(delegate_to);
+            Ok(())
+        } else {
+            return Err(Error::<T>::AlreadyDelegated.into())
+        }
+    }
+
+    /// Checks if the contract has an existing stake.
+    /// 
+    fn stake_exists(contract_addr: &T::AccountId) -> Result<(),DispatchError>{
+        if DelegateInfoMap::<T>::contains_key(contract_addr){
+            Ok(())
+        }else {
+            Err(Error::<T>::NoStakeExists.into())
+        }
+    }
+
+
+    /// Ensures the given account is the owner of the contract.
+    /// 
+    fn owner_check(owner: &T::AccountId, contract_addr: &T::AccountId) -> Result<DelegateInfo<T>, DispatchError> {
+        let delegate_info = <DelegateInfo<T>>::get(contract_addr)?;
+        if delegate_info.owner == *owner {
+            Ok(delegate_info)
+        } else {
+            Err(Error::<T>::InvalidContractOwner.into())
+        }
+    }
+
+
+    /// Checks if the contract meets the minimum reputation requirement.
+    /// 
+    fn min_reputation(contract_addr : &T::AccountId) -> Result<StakeInfo<T>,DispatchError>{
+        let stake_info = <StakeInfo<T>>::get(contract_addr)?;
+        if stake_info.reputation >= MIN_REPUTATION {
+            Ok(stake_info)
+        } else {
+            Err(Error::<T>::LowReputation.into())
+        }
+            
+    }
+
+    /// Resets the stake information for the given contract.
+    /// 
+    fn reset_stake(contract_addr: &T::AccountId, stake_info: &StakeInfo<T>){
+        let new_stake_info = <StakeInfo<T>>::reset(stake_info);
+        StakeInfoMap::<T>::insert(contract_addr, new_stake_info.clone());
+    }
+
+    /// Increments the number of delegates for a validator.
+    ///
+    /// Updates the delegate count for the specified validator.  
+    /// If the count reaches the minimum required delegates,  
+    /// an event is emitted indicating validation eligibility.
+    /// 
+    fn increment(validator: &T::AccountId) {
+        if let Ok(num_delegates) = <ValidateRequest<T>>::get(validator){
+            let new_num_delegates = num_delegates + 1;
+            <ValidatorInfoMap<T>>::insert(&validator, new_num_delegates);
+            if new_num_delegates >= MIN_DELEGATES {
+                Contracts::<T>::deposit_event(
+                    Event::ValidateInfo { 
+                        validator: validator.clone(), 
+                        num_delegates: new_num_delegates, 
+                        can_validate: true,
+                    }
+                )
+            } else {
+                Contracts::<T>::deposit_event(
+                    Event::ValidateInfo { 
+                        validator: validator.clone(), 
+                        num_delegates: new_num_delegates, 
+                        can_validate: false,
+                    }
+                )
+            }
+        } else {
+            <ValidatorInfoMap<T>>::insert(&validator, 1); 
+            Contracts::<T>::deposit_event(
+                Event::ValidateInfo { 
+                    validator: validator.clone(), 
+                    num_delegates: 1, 
+                    can_validate: false,
+                }
+            );
+        }
+    }
+
+    /// Decrements the number of delegates for a validator.
+    ///
+    /// If the validator has more than one delegate, the count is decreased.  
+    /// If the count drops below the minimum required delegates,  
+    /// an event is emitted indicating validation ineligibility.  
+    /// If no delegates remain, the validator is removed from the map.
+    /// 
+    fn decrement(validator: &T::AccountId) {
+        if let Ok(num_delegates) = <ValidateRequest<T>>::get(validator){
+            if num_delegates > 1 {
+                let new_num_delegates = num_delegates - 1;
+                <ValidatorInfoMap<T>>::insert(&validator, new_num_delegates);
+                if new_num_delegates >= MIN_DELEGATES {
+                    Contracts::<T>::deposit_event(
+                        Event::ValidateInfo { 
+                            validator: validator.clone(), 
+                            num_delegates: new_num_delegates, 
+                            can_validate: true,
+                        }
+                    );
+                } else {
+                    Contracts::<T>::deposit_event(
+                        Event::ValidateInfo { 
+                            validator: validator.clone(), 
+                            num_delegates: new_num_delegates, 
+                            can_validate: false,
+                        }
+                    );
+                }
+            }else{
+                <ValidatorInfoMap<T>>::remove(&validator);
+				Contracts::<T>::deposit_event(
+					Event::ValidateInfo { 
+						validator: validator.clone(), 
+						num_delegates: 0, 
+						can_validate: false,
+					}
+				);
+            }
+        } 
+    }
+
+
+}
+
+
+/// Represents a validation request.
+///
+/// It includes:
+/// - `validator` : For whom the validation request is made 
+/// - `num_delegates` : Total number of the validator's delegate contracts.
+/// 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(T))]
+pub struct ValidateRequest<T: Config> {
+	validator: T::AccountId,
+    num_delegates: u32,
+}
+
+impl<T: Config> ValidateRequest<T> {
+
+    /// Retrieves the number of delegates for a validator.
+    /// 
+    fn get(validator: &T::AccountId) -> Result<u32,DispatchError>{
+        Contracts::<T>::get_validator_info(validator)
+            .ok_or_else(|| Error::<T>::NoValidatorFound.into())
+    }
+ 
+}
+
