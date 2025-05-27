@@ -1212,6 +1212,22 @@ pub mod pallet {
 			to: T::AccountId,
 			amount: BalanceOf<T>,
 		},
+
+		/// Stake Score is updated for a contract (PoCS)
+		Staked {
+			/// The contract address for which stake information is updated
+			contract: T::AccountId,
+			/// The contract's associated stake score
+			stake_score: u128,
+		},
+
+		/// Announce a contract meets minimum reputation for staking 
+		/// Now it can call [`Pallet::delegate`], update its delegate and stake the contract
+		ReadyToStake {
+			/// The contract address which is ready for staking / delegation 
+			contract: T::AccountId
+		},
+		
 	}
 
 	#[pallet::error]

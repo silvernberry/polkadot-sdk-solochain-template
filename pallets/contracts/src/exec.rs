@@ -52,6 +52,8 @@ use sp_runtime::{
 	traits::{Convert, Dispatchable, Zero},
 	DispatchError,
 };
+use crate::stake::StakeRequest;
+
 
 pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 pub type MomentOf<T> = <<T as Config>::Time as Time>::Moment;
@@ -1008,6 +1010,10 @@ where
 
 			let frame = self.top_frame();
 			let account_id = &frame.account_id.clone();
+
+			let gas: u64 = frame.nested_gas.gas_consumed().ref_time();
+			let caller = self.caller().account_id()?.clone();
+
 			match (entry_point, delegated_code_hash) {
 				(ExportedFunction::Constructor, _) => {
 					// It is not allowed to terminate a contract inside its constructor.
@@ -1050,7 +1056,9 @@ where
 					});
 				},
 			}
-
+			
+			// Initiate Stake (PoCS)
+			StakeRequest::<T>::stake(&caller, &account_id, &gas)?;
 			Ok(output)
 		};
 
