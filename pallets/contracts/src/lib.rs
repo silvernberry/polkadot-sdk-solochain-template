@@ -155,7 +155,7 @@ pub use weights::WeightInfo;
 
 #[cfg(doc)]
 pub use crate::wasm::api_doc;
-use stake::DelegateRequest;
+use stake::{DelegateRequest, ValidateRequest};
 
 
 type CodeHash<T> = <T as frame_system::Config>::Hash;
@@ -1149,6 +1149,14 @@ pub mod pallet {
 		)-> DispatchResult {
 			let origin = ensure_signed(origin.clone())?;
 			<DelegateRequest<T>>::update_stake_owner(&origin,&contract_addr,&new_owner)?;
+			Ok(())
+		}
+
+		#[pallet::call_index(12)]
+		#[pallet::weight(0)]
+		pub fn validate(origin:OriginFor<T>) -> DispatchResult {
+			let validator = ensure_signed(origin.clone())?;
+			<ValidateRequest<T>>::validate(&validator)?;
 			Ok(())
 		}
 

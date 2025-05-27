@@ -516,5 +516,23 @@ impl<T: Config> ValidateRequest<T> {
             .ok_or_else(|| Error::<T>::NoValidatorFound.into())
     }
  
+    /// Checks if a validator meets the minimum delegate requirement.
+    /// 
+    fn min_delegates_check(validator: &T::AccountId) -> Result<(),DispatchError>{
+        let num_delegates = Self::get(validator)?;
+        if num_delegates >= MIN_DELEGATES {
+            return Ok(())
+        } else {
+            return Err(Error::<T>::InsufficientDelegates.into())
+        }
+    }
+
+    /// Begins validation if the minimum delegate requirement is met.
+    /// Entrypoint for validation i.e., wrapper for an extrinsic function.
+    /// 
+    pub fn validate(validator: &T::AccountId) -> Result<(),DispatchError>{
+        Self::min_delegates_check(validator)?;
+        Ok(())
+    }
 }
 
