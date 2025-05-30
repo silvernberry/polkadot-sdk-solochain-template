@@ -185,6 +185,11 @@ pub type Executive = frame_executive::Executive<
 	Migrations,
 >;
 
+type EventRecord = frame_system::EventRecord<
+	<Runtime as frame_system::Config>::RuntimeEvent,
+	<Runtime as frame_system::Config>::Hash,
+>;
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -224,10 +229,10 @@ mod runtime {
 	#[runtime::pallet_index(6)]
 	pub type Sudo = pallet_sudo;
 
-	#[runtime::pallet_index(7)]
-	pub type Contracts = pallet_contracts;
-
 	// Include the custom logic from the pallet-template in the runtime.
-	#[runtime::pallet_index(8)]
+	#[runtime::pallet_index(7)]
 	pub type Template = pallet_template;
+
+	#[runtime::pallet_index(8)]
+	pub type Contracts = pallet_contracts;
 }
