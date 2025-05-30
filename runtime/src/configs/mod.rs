@@ -42,6 +42,8 @@ use sp_version::RuntimeVersion;
 // pallet imports
 use pallet_contracts::config_preludes::{DefaultDepositLimit, DepositPerByte, DepositPerItem};
 use pallet_contracts::migration::{v15, v16};
+use pallet_contracts::stake::chain_ext::{FetchStakeInfo,UpdateDelegateInfo};
+
 
 // Local module imports
 use super::{
@@ -187,10 +189,10 @@ impl pallet_contracts::Config for Runtime{
 	type CallFilter = Nothing;
 	type WeightPrice = TransactionPayment;
 	type WeightInfo = pallet_contracts::weights::SubstrateWeight<Runtime>;
-	type ChainExtension = (); 
+	type ChainExtension = (FetchStakeInfo<Self>, UpdateDelegateInfo<Self>); 
 	type Schedule = Schedule;
 	type CallStack = [pallet_contracts::Frame<Self>; 5];
-
+	
 	type DepositPerByte = DepositPerByte;
 	type DepositPerItem = DepositPerItem;
 	type DefaultDepositLimit = DefaultDepositLimit;

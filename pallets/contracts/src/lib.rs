@@ -99,7 +99,7 @@ mod schedule;
 mod storage;
 mod transient_storage;
 mod wasm;
-mod stake;
+pub mod stake;
 
 pub mod chain_extension;
 pub mod debug;

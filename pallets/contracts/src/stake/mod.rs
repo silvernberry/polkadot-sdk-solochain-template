@@ -24,6 +24,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use codec::{ Encode, Decode, MaxEncodedLen };
 use scale_info::TypeInfo;
 use sp_runtime::DispatchError; 
+pub mod chain_ext;
 
 
 /// The minimum reputation required to participate in staking contracts.
