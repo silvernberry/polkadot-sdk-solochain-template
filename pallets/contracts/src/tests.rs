@@ -66,6 +66,9 @@ use sp_runtime::{
 	traits::{BlakeTwo256, Convert, IdentityLookup},
 	AccountId32, BuildStorage, DispatchError, Perbill, TokenError,
 };
+use crate::stake::{ 
+	INITIAL_STAKE_SCORE, REPUTATION_FACTOR, StakeInfo, DelegateInfo, ValidateRequest
+};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -4394,4 +4397,1854 @@ fn read_only_call_works() {
 
 		assert_ok!(builder::call(addr_caller.clone()).data(addr_callee.encode()).build());
 	});
+}
+
+
+#[test]
+fn pocs_stake_maps_update_during_contract_instantiation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialzie First Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Block Number at which contract instantiation takes place
+		let instantiate_block_num = 2;
+		// Initialize Contract Instantiation Block
+		initialize_block(instantiate_block_num);
+		// Instantiate Contract 
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Get Stake Info of the contract
+		let stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Get Delegate Info of the contract
+		let delegate_info = <DelegateInfo<Test>>::get(&contract_addr).unwrap();
+		// Instantiation constants
+		assert_eq!(stake_info.stake_score(),INITIAL_STAKE_SCORE);
+		assert_eq!(stake_info.reputation(),REPUTATION_FACTOR);
+		// Instantiation Block Number
+		assert_eq!(stake_info.blockheight(),instantiate_block_num);
+		assert_eq!(delegate_info.delegate_at(),instantiate_block_num);
+		// Deployer as Owner and Delegated to during instantiation
+		assert_eq!(delegate_info.owner(),ALICE);
+		assert_eq!(delegate_info.delegate_to(),ALICE);
+
+    });
+}
+
+#[test]
+fn pocs_stake_maps_update_after_instantiating_uploaded_code(){
+	// Gets dummy wasm binary for uploading code and code hash for retrieval during contract instantiation
+	let (wasm, code_hash) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialzie First Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Upload wasm binary
+		assert_ok!(Contracts::upload_code(
+			RuntimeOrigin::signed(ALICE),
+			wasm,
+			Some(codec::Compact(1_000)),
+			Determinism::Enforced,
+		));
+		// Block Number at which contract instantiation takes place
+		let instantiate_block_num = 2;
+		// Initialize Contract Instantiation Block
+		initialize_block(instantiate_block_num);
+		// Instantiate Contract using code_hash from compiling dummy to wasm
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Existing(code_hash), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Get Stake Info of the contract
+		let stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Get Delegate Info of the contract
+		let delegate_info = <DelegateInfo<Test>>::get(&contract_addr).unwrap();
+		// Instantiation constants
+		assert_eq!(stake_info.stake_score(),INITIAL_STAKE_SCORE);
+		assert_eq!(stake_info.reputation(),REPUTATION_FACTOR);
+		// Instantiation Block Number
+		assert_eq!(stake_info.blockheight(),instantiate_block_num);
+		assert_eq!(delegate_info.delegate_at(),instantiate_block_num);
+		// Deployer as Owner and Delegated to during instantiation
+		assert_eq!(delegate_info.owner(),ALICE);
+		assert_eq!(delegate_info.delegate_to(),ALICE);
+    });
+}
+
+#[test]
+fn pocs_cannot_delegate_without_minimum_reputation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract 
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Call Contract and try updating reputation, stake score
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Requires more calls in different blocks to reach minimum reputation threshold
+		assert_err!(
+			Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr) 
+			,Error::<Test>::LowReputation);
+    });
+}
+
+#[test]
+fn pocs_cannot_update_owner_without_minimum_reputation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Call Contract and try updating reputation, stake score
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Requires more calls in different blocks to reach minimum reputation threshold
+		assert_err!(
+			Contracts::update_owner(RuntimeOrigin::signed(ALICE), contract_addr.clone(), BOB) 
+			,Error::<Test>::LowReputation);
+    });
+}
+
+#[test]
+fn pocs_delegate_with_minimum_reputation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialzie First Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract 
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize next block to increase reputation
+		initialize_block(2);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize next block as reputation won't increase calling in same block
+		initialize_block(3);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check if ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Stake/Delegate our Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		// Check if delegate_to of our contract is updated to validator contract address
+		assert_eq!(<DelegateInfo<Test>>::get(&contract_addr).unwrap().delegate_to(),validator_addr);
+		// Check for events such as Delegated and ValidateInfo are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+    });
+}
+
+#[test]
+fn pocs_update_owner_with_minimum_reputation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialzie First Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize next block to increase reputation
+		initialize_block(2);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize next block as reputation won't increase calling in same block
+		initialize_block(3);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check if ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Update our Contract Owner to BOB
+		assert_ok!(Contracts::update_owner(RuntimeOrigin::signed(ALICE), contract_addr.clone(), BOB));
+		// Check if owner of our contract is updated to BOB
+		assert_eq!(<DelegateInfo<Test>>::get(&contract_addr).unwrap().owner(),BOB);
+		// Check for StakeOwner event emission
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::StakeOwner {
+					contract: contract_addr.clone(),
+					new_owner: BOB,
+				}),
+			]
+		);
+    });
+}
+
+#[test]
+fn pocs_reputation_not_increase_in_same_block_calls(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balances for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Contract
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Call Contract (Assuming Reputation Not increases as we haven't initiated new blocks)
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Take Current Stake Info after first call
+		let init_stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Call Contract Again (Still in same block)
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Take Stake Info after second call
+		let new_stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Check that reputation is not increased due to consecutive calls in same block
+		assert!(init_stake_info.reputation() == new_stake_info.reputation());
+    });
+}
+
+#[test]
+fn pocs_cannot_delegate_by_non_deployer(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balances for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		let _ = Balances::set_balance(&BOB, 1_000_000);
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake) deployed by ALICE
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Throws error if non-deployer BOB attempts to delegate the ALICE-deployed-contract
+		assert_err!(
+			Contracts::delegate(RuntimeOrigin::signed(BOB), contract_addr.clone(), validator_addr) 
+			,Error::<Test>::InvalidContractOwner);
+    });
+}
+
+#[test]
+fn pocs_cannot_update_owner_by_non_deployer(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balances for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&BOB, 1_000_000);
+		// Instantiate Contract (To Stake) deployed by ALICE
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Throws error if non-deployer BOB attempts to change owner of ALICE-deployed-contract
+		assert_err!(
+			Contracts::update_owner(RuntimeOrigin::signed(BOB), contract_addr.clone(), BOB) 
+			,Error::<Test>::InvalidContractOwner);
+    });
+}
+
+#[test]
+fn pocs_cannot_delegate_an_eoa(){
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Validator Contract
+        let validator_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Throws Error if attempting to delegate a non-contract i.e., EOA
+		// which doesn't contain a stake or delegate info as instantiated contracts only does.
+		assert_err!(
+			Contracts::delegate(RuntimeOrigin::signed(ALICE), CHARLIE, validator_addr) 
+			,Error::<Test>::NoStakeExists);
+    });
+}
+
+#[test]
+fn pocs_cannot_update_owner_an_eoa(){
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Throws Error if attempting to update stake owner of a non-contract i.e., EOA
+		// which doesn't contain a stake or delegate info as instantiated contracts only does.
+		assert_err!(
+			Contracts::update_owner(RuntimeOrigin::signed(ALICE), CHARLIE, BOB) 
+			,Error::<Test>::NoStakeExists);
+    });
+}
+
+#[test]
+fn pocs_no_stake_increase_during_delegation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize new block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize New block to increase reputation during calls to contract
+		initialize_block(2);
+		// Call Contract to attain minimum reputation for delegation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize another block since reputation doesn't increase in consecutive call in same block 
+		initialize_block(3);
+		// Call contract again
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Get Stake Info - includes stake score, reputation - before delegating contract for assertion after delegating
+		let before_delegate_stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Check ReadyToStake even emitted i.e., minimum reputation reached and contract can delegate
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize new block to reset events
+		initialize_block(4);
+		// Delegate Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		// Check Delegated and ValidateInfo events emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Take After delegation stake info of the contract
+		let after_delegate_stake_info = <StakeInfo<Test>>::get(&contract_addr).unwrap();
+		// Check that stake score is not increased during delegation
+		assert!(before_delegate_stake_info.stake_score() >= after_delegate_stake_info.stake_score());
+    });
+}
+
+#[test]
+fn pocs_stake_reset_after_delegation(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize new block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate New Block for attaining mininmum reputation
+		initialize_block(2);
+		// Call Contract
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Instantiate New Block for attaining mininmum reputation
+		initialize_block(3);
+		// Call Contract again
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadToStake Event is emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize block to reset events
+		initialize_block(4);
+		// Delegate contract to validator contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		// Check if Delegated and ValidateInfo events are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Get stake score of contract and check if it resets to initial stake score constant
+		assert_eq!(<StakeInfo<Test>>::get(&contract_addr).unwrap().stake_score(),INITIAL_STAKE_SCORE);
+    });
+}
+
+#[test]
+fn pocs_stake_reset_after_update_owner(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize new block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate New Block for attaining mininmum reputation
+		initialize_block(2);
+		// Call Contract
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Instantiate New Block for attaining mininmum reputation
+		initialize_block(3);
+		// Call Contract again
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadToStake Event is emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize block to reset events
+		initialize_block(4);
+		// Update contract owner to BOB
+		assert_ok!(Contracts::update_owner(RuntimeOrigin::signed(ALICE), contract_addr.clone(), BOB));
+		// Check if StakeOwner event is emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::StakeOwner {
+					contract: contract_addr.clone(),
+					new_owner: BOB,
+				}),
+			]
+		);
+		// Get stake score of contract and check if it resets to initial stake score constant
+		assert_eq!(<StakeInfo<Test>>::get(&contract_addr).unwrap().stake_score(),INITIAL_STAKE_SCORE);
+    });
+}
+
+#[test]
+fn pocs_redundant_update_owner_fails(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize New Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize new block for reputation increment criteria
+		initialize_block(2);
+		// Call Contract, expect reputation increment
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize new block since consecutive calls under same block halts reputation increment
+		initialize_block(3);
+		// Call Contract again, expect minimum reputation attained
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Update contract owner to BOB
+		assert_ok!(Contracts::update_owner(RuntimeOrigin::signed(ALICE), contract_addr.clone(), BOB));
+		// Check if StakeOwner event is emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::StakeOwner {
+					contract: contract_addr.clone(),
+					new_owner: BOB,
+				}),
+			]
+		);
+		// Update contract owner to same owner again to expect error thrown
+		assert_err!(Contracts::update_owner(RuntimeOrigin::signed(BOB), contract_addr.clone(), BOB)
+		, Error::<Test>::AlreadyOwner);
+		}
+	);
+}
+
+
+#[test]
+fn pocs_redundant_delegate_fails(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize New Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize new block for reputation increment criteria
+		initialize_block(2);
+		// Call Contract, expect reputation increment
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize new block since consecutive calls under same block halts reputation increment
+		initialize_block(3);
+		// Call Contract again, expect minimum reputation attained
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Delegate Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Delegate contract to same validator contract again to expect error thrown
+		assert_err!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone())
+		, Error::<Test>::AlreadyDelegated);
+		}
+	);
+}
+
+
+#[test]
+fn pocs_validator_delegate_count_increment(){
+	// Gets dummy wasm binary for first contract deployment
+	let (first_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for second contract deployment
+	let (second_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize New Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&DJANGO, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate First Contract (To Stake)
+        let first_contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(first_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Second Contract (To Stake)
+		let second_contract_addr = Contracts::bare_instantiate(
+			DJANGO, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(second_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize Block, Expect Reputation increase for two contracts during calling
+		initialize_block(2);
+		// Call First Contract
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			first_contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Call Second Contract
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			second_contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize Block, Expect minimum reputation achieved
+		initialize_block(3);
+		// Call First Contract Again
+		assert_ok!(Contracts::bare_call(
+			DJANGO, 
+			first_contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == first_contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Call Second Contract Again, epxect minimum reputation reached
+		assert_ok!(Contracts::bare_call(
+			DJANGO, 
+			second_contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check if ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == second_contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(5);
+		// Dlegate First Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), first_contract_addr.clone(), validator_addr.clone()));
+		// Check if Validator's Number of Delegates is initialized
+		assert_eq!(<ValidateRequest<Test>>::get(&validator_addr).unwrap(),1);
+		// Check Delegated and ValidateInfo event emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated{
+					contract: first_contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo{
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Initialize Block to reset events
+		initialize_block(6);
+		// Delegate Second Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(DJANGO), second_contract_addr.clone(), validator_addr.clone()));
+		// Check if the Validator's number of delegates is incremented
+		assert_eq!(<ValidateRequest<Test>>::get(&validator_addr).unwrap(),2);
+		// Check if Delegated and ValidateInfo events are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: second_contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 2,
+					can_validate: false,
+				}),
+			]
+		);
+		}
+	);
+}
+
+#[test]
+fn pocs_validator_delegate_count_decrement(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for first validator contract deployment
+	let (first_validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for first validator contract deployment
+	let (second_validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize New Block
+		initialize_block(1);
+		// Deposit Balances for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		let _ = Balances::set_balance(&DJANGO, 1_000_000);
+		// Instantiate First Validator Contract
+		let first_validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(first_validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Second Validator Contract
+		let second_validator_addr = Contracts::bare_instantiate(
+			DJANGO, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(second_validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize New Block to meet reputation criteria
+		initialize_block(2);
+		// Call Contract, expect reputation increase
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// initialize New block to reset events
+		initialize_block(3);
+		// Call Contract again, expect minimum reputation attained
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract })
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Delegate Contract to First Validator Address
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), first_validator_addr.clone()));
+		// Check if Validator's number of delegates initialized
+		assert_eq!(<ValidateRequest<Test>>::get(&first_validator_addr).unwrap(),1);
+		// Check Delegated and ValidateInfo events are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated{
+					contract: contract_addr.clone(),
+					delegate_to: first_validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo{
+					validator: first_validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Initialize new block to reset events
+		initialize_block(5);
+		// Delegate Contract to Second Validator Address
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), second_validator_addr.clone()));
+		// Ensure the first validator number of delegates became zero hence, not a validator
+		assert_err!(<ValidateRequest<Test>>::get(&first_validator_addr),Error::<Test>::NoValidatorFound);
+		// Ensure the second validator number of delegates is initialized
+		assert_eq!(<DelegateInfo<Test>>::get(&contract_addr).unwrap().delegate_to(),second_validator_addr.clone());
+		assert_eq!(<ValidateRequest<Test>>::get(&second_validator_addr).unwrap(),1);
+		// Check Delegated and ValidateInfo events are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated{
+					contract: contract_addr.clone(),
+					delegate_to: second_validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo{
+					validator: first_validator_addr.clone(),
+					num_delegates: 0,
+					can_validate: false,
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo{
+					validator: second_validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		}
+	);
+}
+
+#[test]
+fn pocs_stake_score_increment_during_call_pseudo_test(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize new block
+		initialize_block(1);
+		// Deposit Balances for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Contract
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm.clone()), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Validator Contract
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize new block, for reputation increase
+		initialize_block(2);
+		// Call contract, expect reputation increase
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize new block to reset events
+		initialize_block(3);
+		// Call Contract, expect minimum reputation reached
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize new block to reset events
+		initialize_block(4);
+		// Delegate Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		// Check Delegated and ValidateInfo events emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Get Stake Score of contract after Delegation
+		let init_stake_score = <StakeInfo<Test>>::get(&contract_addr).unwrap().stake_score();
+		// Initialize new block to reset events
+		initialize_block(5);
+		// Execute First Call of contract after delegation
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Get Stake Score of contract after first call (recent call)
+		// !!! Need to calulate stake score instead of getting 
+		// Requires creating a new stack frame to execute and provide 
+		// gas info. Hence it is written as a pseudo test : PoCS v0.2 !!!
+		let first_call_stake_score = <StakeInfo<Test>>::get(&contract_addr).unwrap().stake_score();
+		// Check if first call stake score is incremented
+		assert!(first_call_stake_score > init_stake_score);
+		// Check Staked event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::Staked { contract, stake_score }) 
+					if *contract == contract_addr && *stake_score == first_call_stake_score
+			)
+		));
+		// Initialize new block to reset events
+		initialize_block(5);
+		// Execute Second Call of contract after delegation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Get Stake Score of contracta after second call (recent call)
+		let second_call_stake_score = <StakeInfo<Test>>::get(&contract_addr).unwrap().stake_score();
+		// Check second call stake score is increment 
+		assert!(second_call_stake_score > first_call_stake_score);
+		// Check Staked event emitted (!!! pseudo test !!!)
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::Staked { contract, stake_score }) 
+					if *contract == contract_addr && *stake_score == second_call_stake_score
+			)
+		));
+		});
+}
+
+#[test]
+fn pocs_maps_update_when_a_contract_instantiates_new_contract(){
+	// Get caller wasm binary for caller contract deployment which is called to instantiate another existing code hash
+	let (caller_wasm, _) = compile_module::<Test>("caller_contract").unwrap();
+	// Get callee wasm binary which returns with data for uploading code and its code_hash for instantiating via calling caller contract
+	let (callee_wasm, callee_code_hash) = compile_module::<Test>("return_with_data").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(1).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Caller Contract
+		let caller_addr = Contracts::bare_instantiate(
+			ALICE,
+			100_000,
+			GAS_LIMIT,
+			None,
+			Code::Upload(caller_wasm),
+			vec![],
+			vec![],
+			DebugInfo::Skip,
+			CollectEvents::Skip,
+		)
+		.result
+		.unwrap()
+		.account_id;
+		// Upload Callee Wasm binary  
+		Contracts::bare_upload_code(ALICE, callee_wasm, None, Determinism::Enforced).unwrap();
+		let callee_addr = Contracts::contract_address(
+			&caller_addr,
+			&callee_code_hash,
+			&[0, 1, 34, 51, 68, 85, 102, 119], // hard coded in wasm
+			&[],
+		);
+		// Call Caller Contract which deploys callee contract
+		assert_ok!(Contracts::call(
+			RuntimeOrigin::signed(ALICE),
+			caller_addr.clone(),
+			0,
+			GAS_LIMIT,
+			None,
+			callee_code_hash.as_ref().to_vec(),
+		));
+		// Check if maps are updated for callee contract
+		assert_ok!(<StakeInfo<Test>>::get(&callee_addr));
+		assert_ok!(<DelegateInfo<Test>>::get(&callee_addr));
+		
+	});
+}
+
+#[test]
+fn pocs_contract_as_deployer_as_stake_owner_not_signer(){
+	// Get caller wasm binary for caller contract deployment which is called to instantiate another existing code hash
+	let (caller_wasm, _) = compile_module::<Test>("caller_contract").unwrap();
+	// Get callee wasm binary which returns with data for uploading code and its code_hash for instantiating via calling caller contract
+	let (callee_wasm, callee_code_hash) = compile_module::<Test>("return_with_data").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(1).build().execute_with(|| {
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Caller Contract
+		let caller_addr = Contracts::bare_instantiate(
+			ALICE,
+			100_000,
+			GAS_LIMIT,
+			None,
+			Code::Upload(caller_wasm),
+			vec![],
+			vec![],
+			DebugInfo::Skip,
+			CollectEvents::Skip,
+		)
+		.result
+		.unwrap()
+		.account_id;
+		// Upload Callee Wasm binary  
+		Contracts::bare_upload_code(ALICE, callee_wasm, None, Determinism::Enforced).unwrap();
+		let callee_addr = Contracts::contract_address(
+			&caller_addr,
+			&callee_code_hash,
+			&[0, 1, 34, 51, 68, 85, 102, 119], // hard coded in wasm
+			&[],
+		);
+		// Call Caller Contract which deploys callee contract
+		assert_ok!(Contracts::call(
+			RuntimeOrigin::signed(ALICE),
+			caller_addr.clone(),
+			0,
+			GAS_LIMIT,
+			None,
+			callee_code_hash.as_ref().to_vec(),
+		));
+		// Check if Caller is the owner of the callee as Caller instantiated callee
+		assert_eq!(<DelegateInfo<Test>>::get(&callee_addr).unwrap().owner(),caller_addr);
+	});
+}
+
+#[test]
+fn pocs_stake_score_increment_during_contract_delegate_call(){
+	// Gets caller wasm binary for caller contract deployment
+	let (wasm_caller, _) = compile_module::<Test>("call").unwrap();
+	// Gets dummy wasm binary for callee contract deployment
+	let (wasm_callee, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialize New Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		// Instantiate Caller Contract
+		let caller_addr = Contracts::bare_instantiate(
+			ALICE,
+			0,
+			GAS_LIMIT,
+			None,
+			Code::Upload(wasm_caller),
+			vec![],
+			vec![],
+			DebugInfo::Skip,
+			CollectEvents::Skip,
+		)
+		.result
+		.unwrap()
+		.account_id;
+		// Instantiate Callee Contract 
+		let callee_addr = Contracts::bare_instantiate(
+			ALICE,
+			0,
+			GAS_LIMIT,
+			None,
+			Code::Upload(wasm_callee),
+			vec![],
+			vec![],
+			DebugInfo::Skip,
+			CollectEvents::Skip,
+		)
+		.result
+		.unwrap()
+		.account_id;
+		// Initialize Block adhering for Reputation Criteria 
+		initialize_block(2);
+		// Call callee Contract
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			callee_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize Block to reset events
+		initialize_block(3);
+		// Call callee contract, expect minimum reputation attained
+		assert_ok!(Contracts::bare_call(
+			CHARLIE, 
+			callee_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check for ReadyToStake event
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == callee_addr
+			)
+		));
+		// Initialize new block to reset events
+		initialize_block(4);
+		// Delegate Calle contract to Caller Contract, Since after delegation only the stake score increases
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), callee_addr.clone(), caller_addr.clone()));
+		// Check Delegated and ValidateInfo events emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: callee_addr.clone(),
+					delegate_to: caller_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: caller_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Get stake score of callee contract after delegation
+		let init_stake_score = <StakeInfo<Test>>::get(&callee_addr).unwrap().stake_score();
+		// Initialize Block to reset events
+		initialize_block(5);
+		// Call caller contract and pass callee contract address to do delegate call
+		assert_ok!(Contracts::call(
+			RuntimeOrigin::signed(ALICE),
+			caller_addr,
+			0,
+			GAS_LIMIT,
+			None,
+			(100u32, &callee_addr).encode()
+		));
+		// Get stake score of callee contract after recent delegate call from caller contract
+		let new_stake_score = <StakeInfo<Test>>::get(&callee_addr).unwrap().stake_score();
+		// Check if new stake score is incremented
+		assert!(new_stake_score > init_stake_score);
+		// Check Staked event emitted (!!! pseudo test !!! )
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::Staked { contract, stake_score }) 
+					if *contract == callee_addr && *stake_score == new_stake_score
+			)
+		));
+	});
+}
+
+#[test]
+fn pocs_validator_stays_same_after_update_owner(){
+	// Gets dummy wasm binary for contract deployment
+	let (wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Gets dummy wasm binary for validator contract deployment
+	let (validator_wasm, _) = compile_module::<Test>("dummy").unwrap();
+	// Test Execution Interface under a closure
+	ExtBuilder::default().existential_deposit(200).build().execute_with(|| {
+		// Initialzie First Block
+		initialize_block(1);
+		// Deposit Balance for Transaction Fees
+		let _ = Balances::set_balance(&ALICE, 1_000_000);
+		let _ = Balances::set_balance(&CHARLIE, 1_000_000);
+		// Instantiate Validator Contract 
+		let validator_addr = Contracts::bare_instantiate(
+			CHARLIE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(validator_wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Instantiate Contract (To Stake)
+        let contract_addr = Contracts::bare_instantiate(
+			ALICE, 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			Code::Upload(wasm), 
+			vec![], 
+			vec![],
+			DebugInfo::Skip, 
+			CollectEvents::Skip)
+			.result
+			.unwrap()
+			.account_id;
+		// Initialize next block to increase reputation
+		initialize_block(2);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Initialize next block as reputation won't increase calling in same block
+		initialize_block(3);
+		// Call Contract and try updating reputation
+		assert_ok!(Contracts::bare_call(
+			ALICE, 
+			contract_addr.clone(), 
+			0, 
+			GAS_LIMIT, 
+			None, 
+			vec![], 
+			DebugInfo::Skip, 
+			CollectEvents::Skip, 
+			Determinism::Enforced).result);
+		// Check if ReadyToStake event emitted
+		assert!(System::events().iter().any(|event|
+			matches!(
+				&event.event,  
+				RuntimeEvent::Contracts(crate::Event::ReadyToStake { contract }) 
+					if *contract == contract_addr
+			)
+		));
+		// Initialize Block to reset events
+		initialize_block(4);
+		// Stake/Delegate our Contract to Validator Contract
+		assert_ok!(Contracts::delegate(RuntimeOrigin::signed(ALICE), contract_addr.clone(), validator_addr.clone()));
+		// Check if delegate_to of our contract is updated to validator contract address
+		assert_eq!(<DelegateInfo<Test>>::get(&contract_addr).unwrap().delegate_to(),validator_addr);
+		// Check for events such as Delegated and ValidateInfo are emitted
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::Delegated {
+					contract: contract_addr.clone(),
+					delegate_to: validator_addr.clone(),
+				}),
+				RuntimeEvent::Contracts(crate::Event::ValidateInfo {
+					validator: validator_addr.clone(),
+					num_delegates: 1,
+					can_validate: false,
+				}),
+			]
+		);
+		// Initialize block to reset events
+		initialize_block(5);
+		// Update Owner for our Contract to BOB
+		assert_ok!(Contracts::update_owner(RuntimeOrigin::signed(ALICE), contract_addr.clone(), BOB));
+		// Assert if the owner of our contract is changed 
+		assert_eq!(<DelegateInfo<Test>>::get(&contract_addr).unwrap().owner(),BOB);
+		// Assert if Validator Num delegates is unchanged
+		assert_eq!(<ValidateRequest<Test>>::get(&validator_addr).unwrap(),1);
+		assert_eq!(
+			System::events()
+				.iter()
+				.map(|e| e.event.clone())
+				.collect::<Vec<_>>(),
+			[
+				RuntimeEvent::Contracts(crate::Event::StakeOwner {
+					contract: contract_addr.clone(),
+					new_owner: BOB,
+				}),
+			]
+		);
+    });
 }

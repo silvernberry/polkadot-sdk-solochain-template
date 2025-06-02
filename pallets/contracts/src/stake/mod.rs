@@ -23,7 +23,7 @@ use crate::{
 use frame_system::pallet_prelude::BlockNumberFor;
 use codec::{ Encode, Decode, MaxEncodedLen };
 use scale_info::TypeInfo;
-use sp_runtime::DispatchError; 
+use sp_runtime::{ DispatchError, RuntimeDebug }; 
 pub mod chain_ext;
 
 
@@ -37,11 +37,11 @@ const MIN_DELEGATES: u32 = 10;
 
 /// The fixed unit used for incrementing reputation and initializing it during instantiation.
 /// 
-const REPUTATION_FACTOR: u32 = 1;
+pub const REPUTATION_FACTOR: u32 = 1;
 
 /// The initial stake score, set to zero for contract constructor purposes.
 /// 
-const INITIAL_STAKE_SCORE: u128 = 0;
+pub const INITIAL_STAKE_SCORE: u128 = 0;
 
 
 /// Represents the delegation details of a deployed contract.
@@ -51,7 +51,7 @@ const INITIAL_STAKE_SCORE: u128 = 0;
 /// `delegate_to` - The validator account i.e., contract to which the contract is delegated.
 /// `delegate_at` - The block number when the delegation was set.
 /// 
-#[derive(Encode, Decode, Clone, TypeInfo, PartialEq, Eq, MaxEncodedLen)]
+#[derive(Encode, Decode, Clone, TypeInfo, RuntimeDebug, PartialEq, Eq, MaxEncodedLen)]
 #[scale_info(skip_type_params(T))]
 pub struct DelegateInfo<T: Config> {
 	owner : T::AccountId,
@@ -64,25 +64,25 @@ impl<T: Config> DelegateInfo<T> {
 
     /// Returns the owner `AccountId` of the contract associated with this `DelegateInfo`.
     /// 
-    fn owner(&self) -> T::AccountId {
+    pub fn owner(&self) -> T::AccountId {
         self.owner.clone()
     }
 
     /// Returns the `AccountId` of the validator to whom the contract is delegated.
     /// 
-    fn delegate_to(&self) -> T::AccountId {
+    pub fn delegate_to(&self) -> T::AccountId {
         self.delegate_to.clone()
     }
     
     /// Returns the block number when the delegate information was last updated.
     /// 
-    fn delegate_at(&self) -> BlockNumberFor<T> {
+    pub fn delegate_at(&self) -> BlockNumberFor<T> {
         self.delegate_at
     }
 
     /// Retrieves the `DelegateInfo` for a given contract address.
     /// 
-    fn get(contract_addr: &T::AccountId) -> Result<DelegateInfo<T>, DispatchError> {
+    pub fn get(contract_addr: &T::AccountId) -> Result<DelegateInfo<T>, DispatchError> {
         Contracts::<T>::get_delegate_info(contract_addr)
             .ok_or_else(|| Error::<T>::NoStakeExists.into())
     }
@@ -126,7 +126,7 @@ impl<T: Config> DelegateInfo<T> {
 /// `blockheight` - The block height of its most recent usage.
 /// `stake_score` - The stake score associated with the contract.
 /// 
-#[derive(Encode, Decode, Clone, TypeInfo,  PartialEq, Eq, MaxEncodedLen)]
+#[derive(Encode, Decode, Clone, TypeInfo, RuntimeDebug, PartialEq, Eq, MaxEncodedLen)]
 #[scale_info(skip_type_params(T))]
 pub struct StakeInfo<T: Config> {
 	reputation: u32,
@@ -138,25 +138,25 @@ impl<T: Config> StakeInfo<T>{
 
     /// Returns the stake score of a contract's `StakeInfo`. 
     /// 
-    fn stake_score(&self) -> u128 {
+    pub fn stake_score(&self) -> u128 {
         self.stake_score
     }
 
     /// Returns the reputation score of a contract's `StakeInfo`.
     /// 
-    fn reputation(&self) -> u32 {
+    pub fn reputation(&self) -> u32 {
         self.reputation
     }
     
     /// Returns the block height of the most recent interaction with the contract. 
     /// 
-    fn blockheight(&self) -> BlockNumberFor<T> {
+    pub fn blockheight(&self) -> BlockNumberFor<T> {
         self.blockheight
     }
 
     /// Retrieves the `StakeInfo` of an instantiated contract.
     /// 
-    fn get(contract_addr: &T::AccountId) -> Result<StakeInfo<T>,DispatchError> {
+    pub fn get(contract_addr: &T::AccountId) -> Result<StakeInfo<T>,DispatchError> {
         Contracts::<T>::get_stake_info(contract_addr)
             .ok_or_else(|| Error::<T>::NoStakeExists.into())
     }
@@ -512,7 +512,7 @@ impl<T: Config> ValidateRequest<T> {
 
     /// Retrieves the number of delegates for a validator.
     /// 
-    fn get(validator: &T::AccountId) -> Result<u32,DispatchError>{
+    pub fn get(validator: &T::AccountId) -> Result<u32,DispatchError>{
         Contracts::<T>::get_validator_info(validator)
             .ok_or_else(|| Error::<T>::NoValidatorFound.into())
     }
