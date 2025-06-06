@@ -1,8 +1,8 @@
 [workspace.package]
 license = "MIT-0"
-authors = ["Parity Technologies <admin@parity.io>"]
-homepage = "https://paritytech.github.io/polkadot-sdk/"
-repository = "https://github.com/paritytech/polkadot-sdk-solochain-template.git"
+authors = ["Auguth"]
+homepage = "https://github.com/auguth"
+repository = "https://github.com/auguth/substrate-aura.git"
 edition = "2021"
 
 [workspace]
@@ -60,7 +60,7 @@ zero-prefixed-literal = { level = "allow", priority = 2 }            # 00_1000_0
 pallet-contracts = { path = "pallets/contracts", default-features = false }
 pallet-contracts-fixtures = { path = "pallets/contracts/fixtures", default-features = false }
 pallet-template = { path = "./pallets/template", default-features = false }
-solochain-template-runtime = { path = "./runtime", default-features = false }
+substrate-aura-runtime = { path = "./runtime", default-features = false }
 
 # --- Substrate/Polkadot Core ---
 codec = { version = "3.7.4", default-features = false, package = "parity-scale-codec" }
