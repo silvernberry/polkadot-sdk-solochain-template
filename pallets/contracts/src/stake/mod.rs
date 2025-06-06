@@ -299,6 +299,25 @@ impl<T: Config> StakeRequest<T>{
         Ok(())
     }
 
+    /// Deletes stake and delegate information for a given contract.
+    ///
+    /// This function removes the stake and delegate records associated with  
+    /// the specified contract address. If the contract had a delegate other  
+    /// than its owner, it decrements the [`Pallet::ValidateInfo`] Map num_delegates count.
+    /// 
+    pub fn delete(contract_addr: &T::AccountId){
+        if StakeInfoMap::<T>::contains_key(&contract_addr) {
+            StakeInfoMap::<T>::remove(&contract_addr);
+        } 
+        if DelegateInfoMap::<T>::contains_key(&contract_addr){
+            let delegate_info = <DelegateInfo<T>>::get(&contract_addr).unwrap();
+            let delegate_to = delegate_info.delegate_to();
+            if delegate_to != delegate_info.owner(){
+                <DelegateRequest<T>>::decrement(&delegate_to);
+            }
+            DelegateInfoMap::<T>::remove(&contract_addr);
+        }
+    }
 
 }
 

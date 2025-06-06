@@ -1390,6 +1390,8 @@ where
 			contract: frame.account_id.clone(),
 			beneficiary: beneficiary.clone(),
 		});
+		// Delete Stake (PoCS)
+		StakeRequest::<T>::delete(&frame.account_id);
 		Ok(())
 	}
 
